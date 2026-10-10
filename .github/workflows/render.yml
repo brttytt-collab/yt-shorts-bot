@@ -26,6 +26,7 @@ jobs:
       - name: Render video
         env:
           PAYLOAD: ${{ github.event.client_payload.script_data }}
+          PIXABAY_KEY: ${{ secrets.PIXABAY_KEY }}
         run: python render.py
 
       - name: Save video
