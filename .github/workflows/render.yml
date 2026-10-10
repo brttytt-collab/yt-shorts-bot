@@ -1,0 +1,19 @@
+name: Render and Upload YouTube Short
+
+on:
+  repository_dispatch:
+    types: [generate_short]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Run test
+        env:
+          PAYLOAD: ${{ github.event.client_payload.script_data }}
+        run: |
+          echo "Payload length: ${#PAYLOAD}"
