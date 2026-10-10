@@ -1,4 +1,4 @@
-[10/11/2026 2:35 AM] Ahmed khalaf: import json, os, subprocess, urllib.request, urllib.parse
+import json, os, subprocess, urllib.request, urllib.parse
 
 data = json.loads(os.environ["PAYLOAD"])
 ai = data["ai"]
@@ -103,7 +103,7 @@ for i, s in enumerate(scenes):
     # captions: groups of 3 words, timed by text length inside the voice
     ws = narr.split()
     groups = [" ".join(ws[k:k + 3]) for k in range(0, len(ws), 3)]
-[10/11/2026 2:35 AM] Ahmed khalaf: weights = [max(1, len(g)) for g in groups]
+    weights = [max(1, len(g)) for g in groups]
     speak = d - 0.25
     gt = t
     for g, w in zip(groups, weights):
