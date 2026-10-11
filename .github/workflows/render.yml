@@ -22,13 +22,13 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y ffmpeg fonts-hosny-amiri fontconfig
           fc-cache -f
-          fc-list | grep -i amiri | head -3
-          pip install edge-tts
+          pip install edge-tts pillow
 
       - name: Render video
         env:
           PAYLOAD: ${{ github.event.client_payload.script_data }}
           PIXABAY_KEY: ${{ secrets.PIXABAY_KEY }}
+          OPENAI_KEY: ${{ secrets.OPENAI_KEY }}
         run: python render.py
 
       - name: Save video
