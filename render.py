@@ -106,6 +106,8 @@ run(["ffmpeg", "-y", "-i", "voice_n.wav", "-af", "adelay=%d|%d,apad=pad_dur=%.2f
 lens = [max(8, len(p)) for p in parts]
 durs = [total_voice * n / sum(lens) for n in lens]
 durs[0] += lead
+durs[-1] += tail
+
 W, H = 1080, 1920
 FPS = 30
 AMIRI = "/usr/share/fonts/truetype/hosny-amiri/Amiri-Bold.ttf"
@@ -145,26 +147,28 @@ def make_bell(angle_deg):
     return im.resize((120, 88), Image.LANCZOS)
 
 
+# <-- CHANGED: the whole make_hand function (index finger raised)
 def make_hand():
     im = Image.new("RGBA", (400, 560), (0, 0, 0, 0))
     d = ImageDraw.Draw(im)
     skin = (255, 206, 158, 255)
     shade = (214, 160, 115, 255)
     sleeve = (245, 245, 250, 255)
-    d.rounded_rectangle((90, 240, 330, 500), 70, fill=skin)
-    d.rounded_rectangle((150, 20, 235, 330), 42, fill=skin)
-    d.rounded_rectangle((235, 250, 285, 350), 25, fill=skin)
-    d.rounded_rectangle((285, 270, 335, 365), 25, fill=skin)
-    d.rounded_rectangle((55, 330, 135, 440), 38, fill=skin)
-    d.line((235, 268, 235, 340), fill=shade, width=6)
-    d.line((285, 288, 285, 355), fill=shade, width=6)
-    d.line((140, 345, 140, 420), fill=shade, width=5)
+    d.rounded_rectangle((100, 270, 340, 500), 70, fill=skin)
+    d.rounded_rectangle((115, 20, 195, 320), 40, fill=skin)
+    d.rounded_rectangle((195, 245, 245, 315), 24, fill=skin)
+    d.rounded_rectangle((245, 255, 295, 325), 24, fill=skin)
+    d.rounded_rectangle((295, 270, 340, 335), 22, fill=skin)
+    d.rounded_rectangle((55, 330, 140, 430), 38, fill=skin)
+    d.line((195, 262, 195, 315), fill=shade, width=5)
+    d.line((245, 272, 245, 322), fill=shade, width=5)
+    d.line((295, 285, 295, 330), fill=shade, width=5)
     d.rounded_rectangle((105, 480, 325, 560), 20, fill=sleeve)
     return im.resize((180, 252), Image.LANCZOS)
 
 
 HAND = make_hand()
-HAND_TIP = (86, 10)
+HAND_TIP = (80, 10)  # <-- CHANGED
 ROW_Y = 1050
 SUB_CX = 400
 BELL_CX = 780
@@ -228,6 +232,7 @@ def frame(tsec, base):
     ang = 28 * math.exp(-2.2 * bt) * math.sin(bt * 20) if bt >= 0 else 0
     bell = make_bell(ang)
     img.paste(bell, (int(BELL_CX - 60), int(ROW_Y - 43)), bell)
+
     sc = 1 - 0.08 * press
     hw, hh = int(HAND.width * sc), int(HAND.height * sc)
     hand = HAND.resize((hw, hh), Image.LANCZOS)
@@ -311,4 +316,3 @@ run(["ffmpeg", "-y", "-i", "joined.mp4", "-i", "voice.wav", "-vf", "subtitles=su
 with open("output/meta.json", "w", encoding="utf-8") as f:
     json.dump({"title": ai.get("title"), "description": ai.get("description"), "tags": ai.get("tags"), "topic": ai.get("topic")}, f, ensure_ascii=False)
 print("DONE")
-durs[-1] += tail
