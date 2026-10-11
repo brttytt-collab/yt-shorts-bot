@@ -7,7 +7,7 @@ fallback_videos = data.get("videos", [])
 content = ai["scenes"]
 PIX = os.environ.get("PIXABAY_KEY", "")
 OAI = os.environ.get("OPENAI_KEY", "")
-USE_OPENAI = False  # True = OpenAI voice (needs OPENAI_KEY secret)
+USE_OPENAI = False
 VOICE = "ar-EG-ShakirNeural"
 FONT = "Amiri"
 subject = (ai.get("subject_en") or "").strip()
@@ -19,9 +19,7 @@ def run(cmd):
 
 
 def duration(path):
-    out = subprocess.check_output([
-        "ffprobe", "-v", "error", "-show_entries", "format=duration",
-        "-of", "default=nw=1:nk=1", path])
+    out = subprocess.check_output(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=nw=1:nk=1", path])
     return float(out.decode().strip())
 
 
@@ -48,8 +46,7 @@ used = set()
 
 
 def search(q):
-    url = ("https://pixabay.com/api/videos/?key=" + PIX
-           + "&per_page=15&q=" + urllib.parse.quote(q))
+    url = "https://pixabay.com/api/videos/?key=" + PIX + "&per_page=15&q=" + urllib.parse.quote(q)
     req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
     with urllib.request.urlopen(req, timeout=60) as r:
         hits = json.loads(r.read().decode())["hits"]
@@ -78,7 +75,6 @@ def find_video(query, i):
     raise SystemExit("no video available")
 
 
-# ---------- text parts ----------
 intro = clean(ai.get("intro"))
 outro = clean(ai.get("outro")) or "اشترك في القناة وفعّل الجرس لتصلك كل جديد"
 body = [clean(s.get("narration")) for s in content]
@@ -88,37 +84,28 @@ parts = ([intro] if intro else []) + body + [outro]
 kinds = (["intro"] if intro else []) + ["content"] * len(body) + ["outro"]
 pq = ([""] if intro else []) + queries + [""]
 
-# ---------- ONE continuous voice ----------
 full = " ".join(p if p[-1] in ".!?" else p + "." for p in parts)
 with open("full.txt", "w", encoding="utf-8") as f:
     f.write(full)
+
 if USE_OPENAI and OAI:
-    body_json = json.dumps({"model": "gpt-4o-mini-tts", "voice": "onyx",
-                            "input": full, "response_format": "mp3",
-                            "instructions": "Speak Arabic like a calm professional documentary narrator, clear, warm, smooth pacing."}).encode()
-    req = urllib.request.Request("https://api.openai.com/v1/audio/speech", data=body_json,
-                                 headers={"Authorization": "Bearer " + OAI,
-                                          "Content-Type": "application/json"})
+    payload = {"model": "gpt-4o-mini-tts", "voice": "onyx", "input": full, "response_format": "mp3", "instructions": "Speak Arabic like a calm professional documentary narrator, clear, warm, smooth pacing."}
+    body_json = json.dumps(payload).encode()
+    req = urllib.request.Request("https://api.openai.com/v1/audio/speech", data=body_json, headers={"Authorization": "Bearer " + OAI, "Content-Type": "application/json"})
     with urllib.request.urlopen(req, timeout=180) as r, open("voice_raw.mp3", "wb") as f:
         f.write(r.read())
 else:
-    run(["edge-tts", "--voice", VOICE, "--rate=-3%", "--file", "full.txt",
-         "--write-media", "voice_raw.mp3"])
-    "-af", "silenceremove=start_periods=1:start_threshold=-45dB,loudnorm=I=-16:TP=-1.5:LRA=11",
-     "-ar", "44100", "-ac", "2", "voice_n.wav"])
+    run(["edge-tts", "--voice", VOICE, "--rate=-3%", "--file", "full.txt", "--write-media", "voice_raw.mp3"])
+
+run(["ffmpeg", "-y", "-i", "voice_raw.mp3", "-af", "silenceremove=start_periods=1:start_threshold=-45dB,loudnorm=I=-16:TP=-1.5:LRA=11", "-ar", "44100", "-ac", "2", "voice_n.wav"])
 total_voice = duration("voice_n.wav")
 lead = 0.4
-tail = 3.0  # extra seconds for the subscribe screen after the voice
-run(["ffmpeg", "-y", "-i", "voice_n.wav", "-af",
-     "adelay=%d|%d,apad=pad_dur=%.2f" % (int(lead * 1000), int(lead * 1000), tail),
-     "voice.wav"])
+tail = 3.0
+run(["ffmpeg", "-y", "-i", "voice_n.wav", "-af", "adelay=%d|%d,apad=pad_dur=%.2f" % (int(lead * 1000), int(lead * 1000), tail), "voice.wav"])
 
 lens = [max(8, len(p)) for p in parts]
-durs = [total_voice * l / sum(lens) for l in lens]
+durs = [total_voice * n / sum(lens) for n in lens]
 durs[0] += lead
-durs[-1] += tail
-
-# ---------- subscribe screen (drawn, YouTube style) ----------
 W, H = 1080, 1920
 FPS = 30
 AMIRI = "/usr/share/fonts/truetype/hosny-amiri/Amiri-Bold.ttf"
@@ -146,7 +133,6 @@ def draw_text_center(d, txt, y, size, fill):
 
 
 def make_bell(angle_deg):
-    # YouTube-like filled bell, drawn big then rotated and shrunk (smooth edges)
     im = Image.new("RGBA", (600, 440), (0, 0, 0, 0))
     d = ImageDraw.Draw(im)
     white = (255, 255, 255, 255)
@@ -178,8 +164,7 @@ def make_hand():
 
 
 HAND = make_hand()
-HAND_TIP = (86, 10)  # fingertip position inside the hand image
-
+HAND_TIP = (86, 10)
 ROW_Y = 1050
 SUB_CX = 400
 BELL_CX = 780
@@ -225,7 +210,7 @@ def frame(tsec, base):
     subscribed = p >= 1.1
     sub_press = press if 0.9 <= p < 1.3 else 0.0
     bell_press = press if 2.1 <= p < 2.5 else 0.0
-# subscribe button (YouTube red -> gray "subscribed")
+
     k = 1 - 0.06 * sub_press
     if subscribed:
         pill(d, SUB_CX, ROW_Y, 520 * k, 140 * k, (70, 70, 78))
@@ -237,15 +222,12 @@ def frame(tsec, base):
     lw = d.textlength(label, font=f)
     d.text((SUB_CX - lw / 2, ROW_Y - 62), label, font=f, fill=(255, 255, 255))
 
-    # bell button (dark pill + white bell, rings after the press)
     kb = 1 - 0.06 * bell_press
     pill(d, BELL_CX, ROW_Y, 180 * kb, 140 * kb, (39, 39, 44))
     bt = p - 2.2
     ang = 28 * math.exp(-2.2 * bt) * math.sin(bt * 20) if bt >= 0 else 0
     bell = make_bell(ang)
     img.paste(bell, (int(BELL_CX - 60), int(ROW_Y - 43)), bell)
-
-    # hand (on top, fingertip touches the button)
     sc = 1 - 0.08 * press
     hw, hh = int(HAND.width * sc), int(HAND.height * sc)
     hand = HAND.resize((hw, hh), Image.LANCZOS)
@@ -259,27 +241,26 @@ def frame(tsec, base):
 os.makedirs("frames", exist_ok=True)
 sub_d = durs[-1]
 base = grad_bg()
-n = int(sub_d * FPS) + 1
-for k in range(n):
+nframes = int(sub_d * FPS) + 1
+for k in range(nframes):
     frame(k / FPS, base).save("frames/f%04d.png" % k, compress_level=1)
-run(["ffmpeg", "-y", "-framerate", str(FPS), "-i", "frames/f%04d.png",
-     "-c:v", "libx264", "-pix_fmt", "yuv420p", "-preset", "veryfast", "-crf", "22",
-     "-t", "%.3f" % sub_d, "sub_screen.mp4"])
+run(["ffmpeg", "-y", "-framerate", str(FPS), "-i", "frames/f%04d.png", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-preset", "veryfast", "-crf", "22", "-t", "%.3f" % sub_d, "sub_screen.mp4"])
 
-# ---------- video segments + captions ----------
-ass = ["[Script Info]", "ScriptType: v4.00+", "PlayResX: 1080",
-       "PlayResY: 1920", "WrapStyle: 2", "",
-       "[V4+ Styles]",
-       "Format: Name,Fontname,Fontsize,PrimaryColour,SecondaryColour,"
-       "OutlineColour,BackColour,Bold,Italic,Underline,StrikeOut,ScaleX,"
-       "ScaleY,Spacing,Angle,BorderStyle,Outline,Shadow,Alignment,"
-       "MarginL,MarginR,MarginV,Encoding",
-       "Style: Default,%s,115,&H00FFFFFF,&H00FFFFFF,"
-       "&H00000000,&H80000000,1,0,0,0,100,100,0,0,1,8,3,2,60,60,500,1" % FONT,
-       "Style: Hook,%s,125,&H0000E0FF,&H0000E0FF,"
-       "&H00000000,&H80000000,1,0,0,0,100,100,0,0,1,9,3,8,60,60,260,1" % FONT,
-       "", "[Events]",
-       "Format: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text"]
+ass = [
+    "[Script Info]",
+    "ScriptType: v4.00+",
+    "PlayResX: 1080",
+    "PlayResY: 1920",
+    "WrapStyle: 2",
+    "",
+    "[V4+ Styles]",
+    "Format: Name,Fontname,Fontsize,PrimaryColour,SecondaryColour,OutlineColour,BackColour,Bold,Italic,Underline,StrikeOut,ScaleX,ScaleY,Spacing,Angle,BorderStyle,Outline,Shadow,Alignment,MarginL,MarginR,MarginV,Encoding",
+    "Style: Default,%s,115,&H00FFFFFF,&H00FFFFFF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,1,8,3,2,60,60,500,1" % FONT,
+    "Style: Hook,%s,125,&H0000E0FF,&H0000E0FF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,1,9,3,8,60,60,260,1" % FONT,
+    "",
+    "[Events]",
+    "Format: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text",
+]
 
 t = 0.0
 vlist = []
@@ -300,12 +281,7 @@ for i, (p, kind) in enumerate(zip(parts, kinds)):
         continue
     clip = "clip%d.mp4" % i
     download(find_video(pq[i], i), clip)
-    run(["ffmpeg", "-y", "-stream_loop", "-1", "-i", clip,
-         "-t", "%.3f" % d,
-         "-vf", "scale=1080:1920:force_original_aspect_ratio=increase,"
-                "crop=1080:1920,setsar=1,fps=30",
-         "-an", "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
-         "-pix_fmt", "yuv420p", "sv%d.mp4" % i])
+    run(["ffmpeg", "-y", "-stream_loop", "-1", "-i", clip, "-t", "%.3f" % d, "-vf", "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1,fps=30", "-an", "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-pix_fmt", "yuv420p", "sv%d.mp4" % i])
     vlist.append("sv%d.mp4" % i)
     ws = p.split()
     groups = [" ".join(ws[k:k + 3]) for k in range(0, len(ws), 3)]
@@ -328,18 +304,11 @@ with open("subs.ass", "w", encoding="utf-8") as f:
 with open("vlist.txt", "w") as f:
     for v in vlist:
         f.write("file '%s'\n" % v)
-     run(["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", "vlist.txt",
-     "-c", "copy", "joined.mp4"])
-run(["ffmpeg", "-y", "-i", "joined.mp4", "-i", "voice.wav",
-     "-vf", "subtitles=subs.ass:fontsdir=/usr/share/fonts",
-     "-map", "0:v", "-map", "1:a",
-     "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
-     "-c:a", "aac", "-b:a", "192k", "-shortest", "output/video.mp4"])
+
+run(["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", "vlist.txt", "-c", "copy", "joined.mp4"])
+run(["ffmpeg", "-y", "-i", "joined.mp4", "-i", "voice.wav", "-vf", "subtitles=subs.ass:fontsdir=/usr/share/fonts", "-map", "0:v", "-map", "1:a", "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-c:a", "aac", "-b:a", "192k", "-shortest", "output/video.mp4"])
 
 with open("output/meta.json", "w", encoding="utf-8") as f:
-    json.dump({"title": ai.get("title"), "description": ai.get("description"),
-               "tags": ai.get("tags"), "topic": ai.get("topic")},
-              f, ensure_ascii=False)
-print("DONE")   
-
-run(["ffmpeg", "-y", "-i", "voice_raw.mp3",
+    json.dump({"title": ai.get("title"), "description": ai.get("description"), "tags": ai.get("tags"), "topic": ai.get("topic")}, f, ensure_ascii=False)
+print("DONE")
+durs[-1] += tail
