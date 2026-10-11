@@ -3,9 +3,11 @@ import json, os, re, subprocess, urllib.request, urllib.parse
 data = json.loads(os.environ["PAYLOAD"])
 ai = data["ai"]
 fallback_videos = data.get("videos", [])
-scenes = ai["scenes"]
+content = ai["scenes"]
 PIX = os.environ.get("PIXABAY_KEY", "")
 subject = (ai.get("subject_en") or "").strip()
+VOICE = "ar-EG-ShakirNeural"
+FONT = "Amiri"
 os.makedirs("output", exist_ok=True)
 
 
@@ -34,8 +36,8 @@ def ts(t):
 
 
 def clean(text):
-    text = re.sub(r"[\u064B-\u065F\u0670\u0640]", "", text)
-    text = re.sub(r"[^\u0600-\u06FF0-9\s\.\,\!\?\:\-]", " ", text)
+    text = re.sub(r"[\u064B-\u065F\u0670\u0640]", "", text or "")
+    text = re.sub(r"[^\u0621-\u064A0-9\s\.\,\!\?\:\-]", " ", text)
     return re.sub(r"\s+", " ", text).strip()
 
 
@@ -59,7 +61,7 @@ def search(q):
 
 def find_video(query, i):
     if PIX:
-        for q in [(subject + " " + query).strip(), subject, query]:
+        for q in [(subject + " " + query).strip(), subject, query, "nature"]:
             if not q:
                 continue
             try:
@@ -73,9 +75,19 @@ def find_video(query, i):
     raise SystemExit("no video available")
 
 
-narrs = [clean(s.get("narration") or "") for s in scenes]
-narrs = [n if n else "." for n in narrs]
-hook = clean(ai.get("hook") or "")
+# full timeline: intro + content + outro
+items = []
+intro = clean(ai.get("intro"))
+if intro:
+    items.append({"kind": "intro", "text": intro, "q": ""})
+for s in content:
+    n = clean(s.get("narration"))
+    if n:
+        items.append({"kind": "content", "text": n, "q": s.get("search_query", "")})
+outro = clean(ai.get("outro")) or "اشترك في القناة واضغط على الجرس للمزيد"
+items.append({"kind": "outro", "text": outro, "q": ""})
+
+hook = clean(ai.get("hook"))
 
 ass = ["[Script Info]", "ScriptType: v4.00+", "PlayResX: 1080",
        "PlayResY: 1920", "WrapStyle: 2", "",
@@ -84,55 +96,65 @@ ass = ["[Script Info]", "ScriptType: v4.00+", "PlayResX: 1080",
        "OutlineColour,BackColour,Bold,Italic,Underline,StrikeOut,ScaleX,"
        "ScaleY,Spacing,Angle,BorderStyle,Outline,Shadow,Alignment,"
        "MarginL,MarginR,MarginV,Encoding",
-       "Style: Default,Noto Sans Arabic,110,&H00FFFFFF,&H00FFFFFF,"
-       "&H00000000,&H80000000,1,0,0,0,100,100,0,0,1,7,2,2,50,50,480,1",
-       "Style: Hook,Noto Sans Arabic,120,&H0000FFFF,&H0000FFFF,"
-       "&H00000000,&H80000000,1,0,0,0,100,100,0,0,1,8,2,8,50,50,260,1",
+       "Style: Default,%s,120,&H00FFFFFF,&H00FFFFFF,"
+       "&H00000000,&H80000000,1,0,0,0,100,100,0,0,1,8,3,2,50,50,500,1" % FONT,
+       "Style: Hook,%s,130,&H0000E0FF,&H0000E0FF,"
+       "&H00000000,&H80000000,1,0,0,0,100,100,0,0,1,9,3,8,50,50,260,1" % FONT,
+       "Style: Sub,%s,125,&H0000A5FF,&H0000A5FF,"
+       "&H00000000,&H80000000,1,0,0,0,100,100,0,0,1,9,3,2,50,50,500,1" % FONT,
+       "Style: Tag,%s,95,&H00FFFFFF,&H00FFFFFF,"
+       "&H00000000,&H80000000,1,0,0,0,100,100,0,0,1,7,3,8,50,50,420,1" % FONT,
        "", "[Events]",
        "Format: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text"]
 
-if hook:
-    ass.append("Dialogue: 1,%s,%s,Hook,,0,0,0,,%s" % (ts(0), ts(3.2), hook))
-
 t = 0.0
-for i, s in enumerate(scenes):
-    narr = narrs[i]
+ci = 0
+for i, it in enumerate(items):
     with open("n%d.txt" % i, "w", encoding="utf-8") as f:
-        f.write(narr)
-    run(["edge-tts", "--voice", "ar-SA-HamedNeural",
+        f.write(it["text"])
+    run(["edge-tts", "--voice", VOICE, "--rate=-4%",
          "--file", "n%d.txt" % i, "--write-media", "a%d.mp3" % i])
-    d = duration("a%d.mp3" % i) + 0.25
-
-    run(["ffmpeg", "-y", "-i", "a%d.mp3" % i, "-af", "apad",
+    d = duration("a%d.mp3" % i) + 0.3
+    run(["ffmpeg", "-y", "-i", "a%d.mp3" % i,
+         "-af", "loudnorm=I=-16:TP=-1.5:LRA=11,apad",
          "-t", "%.3f" % d, "-ar", "44100", "-ac", "2", "sa%d.wav" % i])
 
     clip = "clip%d.mp4" % i
-    download(find_video(s.get("search_query", ""), i), clip)
+    q = it["q"] or ("subscribe" if it["kind"] == "outro" else "")
+    download(find_video(q, i), clip)
     run(["ffmpeg", "-y", "-stream_loop", "-1", "-i", clip,
          "-t", "%.3f" % d,
          "-vf", "scale=1080:1920:force_original_aspect_ratio=increase,"
                 "crop=1080:1920,setsar=1,fps=30",
          "-an", "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
          "-pix_fmt", "yuv420p", "sv%d.mp4" % i])
-    ws = narr.split()
+
+    style = "Sub" if it["kind"] == "outro" else "Default"
+    ws = it["text"].split()
     groups = [" ".join(ws[k:k + 3]) for k in range(0, len(ws), 3)]
     weights = [max(1, len(g)) for g in groups]
-    speak = d - 0.25
+    speak = d - 0.3
     gt = t
     for g, w in zip(groups, weights):
         gd = speak * w / sum(weights)
-        ass.append("Dialogue: 0,%s,%s,Default,,0,0,0,,%s" % (ts(gt), ts(gt + gd), g))
+        ass.append("Dialogue: 0,%s,%s,%s,,0,0,0,,%s" % (ts(gt), ts(gt + gd), style, g))
         gt += gd
+    if it["kind"] == "outro":
+        ass.append("Dialogue: 1,%s,%s,Tag,,0,0,0,,%s" % (
+            ts(t), ts(t + d), "اشترك  \u2022  فعّل الجرس  \u2022  شاركنا"))
     t += d
+
+if hook:
+    ass.append("Dialogue: 1,%s,%s,Hook,,0,0,0,,%s" % (ts(0), ts(3.0), hook))
 
 with open("subs.ass", "w", encoding="utf-8") as f:
     f.write("\n".join(ass))
 
 with open("vlist.txt", "w") as f:
-    for i in range(len(scenes)):
+    for i in range(len(items)):
         f.write("file 'sv%d.mp4'\n" % i)
 with open("alist.txt", "w") as f:
-    for i in range(len(scenes)):
+    for i in range(len(items)):
         f.write("file 'sa%d.wav'\n" % i)
 
 run(["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", "vlist.txt",
@@ -140,10 +162,10 @@ run(["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", "vlist.txt",
 run(["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", "alist.txt",
      "-c", "copy", "voice.wav"])
 run(["ffmpeg", "-y", "-i", "joined.mp4", "-i", "voice.wav",
-     "-vf", "subtitles=subs.ass",
+     "-vf", "subtitles=subs.ass:fontsdir=/usr/share/fonts",
      "-map", "0:v", "-map", "1:a",
      "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
-     "-c:a", "aac", "-shortest", "output/video.mp4"])
+     "-c:a", "aac", "-b:a", "192k", "-shortest", "output/video.mp4"])
 
 with open("output/meta.json", "w", encoding="utf-8") as f:
     json.dump({"title": ai.get("title"), "description": ai.get("description"),
