@@ -104,33 +104,26 @@ if USE_OPENAI and OAI:
 else:
     run(["edge-tts", "--voice", VOICE, "--rate=-3%", "--file", "full.txt",
          "--write-media", "voice_raw.mp3"])
-
-run(["ffmpeg", "-y", "-i", "voice_raw.mp3",
- "-af", "silenceremove=start_periods=1:start_threshold=-45dB,loudnorm=I=-16:TP=-1.5:LRA=11",
+    "-af", "silenceremove=start_periods=1:start_threshold=-45dB,loudnorm=I=-16:TP=-1.5:LRA=11",
      "-ar", "44100", "-ac", "2", "voice_n.wav"])
 total_voice = duration("voice_n.wav")
 lead = 0.4
-tail = 2.2  # extra seconds for the subscribe screen after the voice
+tail = 3.0  # extra seconds for the subscribe screen after the voice
 run(["ffmpeg", "-y", "-i", "voice_n.wav", "-af",
      "adelay=%d|%d,apad=pad_dur=%.2f" % (int(lead * 1000), int(lead * 1000), tail),
      "voice.wav"])
 
-# each part's duration proportional to its text length
 lens = [max(8, len(p)) for p in parts]
 durs = [total_voice * l / sum(lens) for l in lens]
 durs[0] += lead
 durs[-1] += tail
 
-# ---------- subscribe screen (drawn, no video) ----------
+# ---------- subscribe screen (drawn, YouTube style) ----------
 W, H = 1080, 1920
 FPS = 30
 AMIRI = "/usr/share/fonts/truetype/hosny-amiri/Amiri-Bold.ttf"
 if not os.path.exists(AMIRI):
     AMIRI = subprocess.check_output(["fc-match", "-f", "%{file}", "Amiri:bold"]).decode()
-
-
-def shape_ar(txt):
-    return txt  # libraqm handles shaping when available; plain Amiri works for display
 
 
 def fnt(size):
@@ -139,14 +132,10 @@ def fnt(size):
 
 def grad_bg():
     img = Image.new("RGB", (W, H))
-    px = img.load()
+    d = ImageDraw.Draw(img)
     for y in range(H):
         k = y / H
-        r = int(14 + 60 * k)
-        g = int(18 + 10 * k)
-        b = int(52 + 80 * k)
-        for x in range(0, W):
-            px[x, y] = (r, g, b)
+        d.line((0, y, W, y), fill=(int(14 + 60 * k), int(18 + 10 * k), int(52 + 80 * k)))
     return img
 
 
@@ -156,73 +145,123 @@ def draw_text_center(d, txt, y, size, fill):
     d.text(((W - w) / 2, y), txt, font=f, fill=fill, stroke_width=3, stroke_fill=(0, 0, 0))
 
 
-def bell(d, cx, cy, s, ang):
-    # simple bell with swing
-    import math as m
-    pts = []
-    body = [(-1.0, 0.9), (-0.9, 0.2), (-0.6, -0.5), (-0.2, -0.85), (0.2, -0.85),
-            (0.6, -0.5), (0.9, 0.2), (1.0, 0.9)]
-    for (x, y) in body:
-        x2 = x * m.cos(ang) - y * m.sin(ang)
-        y2 = x * m.sin(ang) + y * m.cos(ang)
-        pts.append((cx + x2 * s, cy + y2 * s))
-    d.polygon(pts, fill=(255, 196, 0))
-    d.ellipse((cx - s * 0.18 + m.sin(ang) * s * 0.3, cy + s * 0.95,
-               cx + s * 0.18 + m.sin(ang) * s * 0.3, cy + s * 1.3), fill=(255, 196, 0))
-    d.ellipse((cx - s * 0.12, cy - s * 1.05, cx + s * 0.12, cy - s * 0.8), fill=(255, 196, 0))
+def make_bell(angle_deg):
+    # YouTube-like filled bell, drawn big then rotated and shrunk (smooth edges)
+    im = Image.new("RGBA", (600, 440), (0, 0, 0, 0))
+    d = ImageDraw.Draw(im)
+    white = (255, 255, 255, 255)
+    d.ellipse((200, 70, 400, 270), fill=white)
+    d.polygon([(200, 170), (400, 170), (435, 290), (165, 290)], fill=white)
+    d.rounded_rectangle((155, 280, 445, 325), 22, fill=white)
+    d.ellipse((265, 335, 335, 390), fill=white)
+    d.ellipse((280, 40, 320, 80), fill=white)
+    im = im.rotate(angle_deg, center=(300, 60), resample=Image.BICUBIC)
+    return im.resize((120, 88), Image.LANCZOS)
 
 
-def hand(d, x, y, press):
-    # stylised pointing hand (finger down), moves by (x, y)
-    skin = (255, 214, 170)
-    line = (150, 90, 50)
-    s = 1.0 - 0.06 * press
-    d.rounded_rectangle((x - 38 * s, y - 40 * s, x + 38 * s, y + 130 * s), 30, fill=skin, outline=line, width=4)
-    d.rounded_rectangle((x - 40 * s, y + 70 * s, x + 90 * s, y + 210 * s), 40, fill=skin, outline=line, width=4)
-    for k in range(3):
-        d.rounded_rectangle((x + 20 * s + k * 22 * s, y + 55 * s, x + 44 * s + k * 22 * s, y + 130 * s), 12, fill=skin, outline=line, width=3)
-    d.rounded_rectangle((x - 70 * s, y + 90 * s, x - 30 * s, y + 160 * s), 18, fill=skin, outline=line, width=3)
+def make_hand():
+    im = Image.new("RGBA", (400, 560), (0, 0, 0, 0))
+    d = ImageDraw.Draw(im)
+    skin = (255, 206, 158, 255)
+    shade = (214, 160, 115, 255)
+    sleeve = (245, 245, 250, 255)
+    d.rounded_rectangle((90, 240, 330, 500), 70, fill=skin)
+    d.rounded_rectangle((150, 20, 235, 330), 42, fill=skin)
+    d.rounded_rectangle((235, 250, 285, 350), 25, fill=skin)
+    d.rounded_rectangle((285, 270, 335, 365), 25, fill=skin)
+    d.rounded_rectangle((55, 330, 135, 440), 38, fill=skin)
+    d.line((235, 268, 235, 340), fill=shade, width=6)
+    d.line((285, 288, 285, 355), fill=shade, width=6)
+    d.line((140, 345, 140, 420), fill=shade, width=5)
+    d.rounded_rectangle((105, 480, 325, 560), 20, fill=sleeve)
+    return im.resize((180, 252), Image.LANCZOS)
 
 
-def frame(tsec, base, heart_text):
+HAND = make_hand()
+HAND_TIP = (86, 10)  # fingertip position inside the hand image
+
+ROW_Y = 1050
+SUB_CX = 400
+BELL_CX = 780
+
+
+def ease(k):
+    k = max(0.0, min(1.0, k))
+    return k * k * (3 - 2 * k)
+
+
+def lerp(a, b, k):
+    return (a[0] + (b[0] - a[0]) * k, a[1] + (b[1] - a[1]) * k)
+
+
+def pill(d, cx, cy, w, h, fill):
+    d.rounded_rectangle((cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2), int(h / 2), fill=fill)
+
+
+def frame(tsec, base):
     img = base.copy()
     d = ImageDraw.Draw(img)
     draw_text_center(d, "لا تنسَ دعمنا", 330, 105, (255, 255, 255))
     draw_text_center(d, "بالاشتراك والجرس", 460, 105, (255, 205, 60))
-    # subscribe button pulsing
-    pulse = 1 + 0.05 * math.sin(tsec * 8)
-    bw, bh = 520 * pulse, 150 * pulse
-    cx, cy = W / 2, 880
-    d.rounded_rectangle((cx - bw / 2, cy - bh / 2, cx + bw / 2, cy + bh / 2), 40, fill=(230, 30, 30))
-    f = fnt(95)
-    label = "اشترك"
-    lw = d.textlength(label, font=f)
-    d.text((cx - lw / 2, cy - 62), label, font=f, fill=(255, 255, 255))
-    # bell swinging
-    ang = 0.35 * math.sin(tsec * 9)
-    bell(d, W / 2, 1230, 120, ang)
-    # moving hand: travels from the right to the button, presses, then to the bell
-    cyc = (tsec % 2.4) / 2.4
-    if cyc < 0.35:
-        k = cyc / 0.35
-        hx, hy = 780 - 330 * k, 1150 - 220 * k
-        press = 0
-    elif cyc < 0.5:
-        hx, hy, press = 450, 930, 1
+
+    C = 4.0
+    p = tsec % C
+    start = (990, 1450)
+    A = (SUB_CX + 40, ROW_Y + 45)
+    B = (BELL_CX, ROW_Y + 45)
+    if p < 0.9:
+        pos, press = lerp(start, A, ease(p / 0.9)), 0.0
+    elif p < 1.3:
+        pos, press = A, math.sin(math.pi * (p - 0.9) / 0.4)
+    elif p < 2.1:
+        pos, press = lerp(A, B, ease((p - 1.3) / 0.8)), 0.0
+    elif p < 2.5:
+        pos, press = B, math.sin(math.pi * (p - 2.1) / 0.4)
+    elif p < 3.3:
+        pos, press = lerp(B, start, ease((p - 2.5) / 0.8)), 0.0
     else:
-        k = min(1, (cyc - 0.5) / 0.3)
-        hx, hy = 450 + 160 * k, 930 + 220 * k
-        press = 1 if cyc > 0.8 else 0
-    hand(d, hx, hy, press)
-    draw_text_center(d, heart_text, 1560, 80, (255, 255, 255))
+        pos, press = start, 0.0
+
+    subscribed = p >= 1.1
+    sub_press = press if 0.9 <= p < 1.3 else 0.0
+    bell_press = press if 2.1 <= p < 2.5 else 0.0
+# subscribe button (YouTube red -> gray "subscribed")
+    k = 1 - 0.06 * sub_press
+    if subscribed:
+        pill(d, SUB_CX, ROW_Y, 520 * k, 140 * k, (70, 70, 78))
+        label = "مشترك"
+    else:
+        pill(d, SUB_CX, ROW_Y, 520 * k, 140 * k, (255, 0, 0))
+        label = "اشترك"
+    f = fnt(88)
+    lw = d.textlength(label, font=f)
+    d.text((SUB_CX - lw / 2, ROW_Y - 62), label, font=f, fill=(255, 255, 255))
+
+    # bell button (dark pill + white bell, rings after the press)
+    kb = 1 - 0.06 * bell_press
+    pill(d, BELL_CX, ROW_Y, 180 * kb, 140 * kb, (39, 39, 44))
+    bt = p - 2.2
+    ang = 28 * math.exp(-2.2 * bt) * math.sin(bt * 20) if bt >= 0 else 0
+    bell = make_bell(ang)
+    img.paste(bell, (int(BELL_CX - 60), int(ROW_Y - 43)), bell)
+
+    # hand (on top, fingertip touches the button)
+    sc = 1 - 0.08 * press
+    hw, hh = int(HAND.width * sc), int(HAND.height * sc)
+    hand = HAND.resize((hw, hh), Image.LANCZOS)
+    img.paste(hand, (int(pos[0] - HAND_TIP[0] * sc), int(pos[1] - HAND_TIP[1] * sc)), hand)
+
+    d = ImageDraw.Draw(img)
+    draw_text_center(d, "شكرًا لمتابعتك", 1560, 80, (255, 255, 255))
     return img
-import shutil
+
+
 os.makedirs("frames", exist_ok=True)
 sub_d = durs[-1]
 base = grad_bg()
 n = int(sub_d * FPS) + 1
 for k in range(n):
-    frame(k / FPS, base, "شكرًا لمتابعتك").save("frames/f%04d.png" % k)
+    frame(k / FPS, base).save("frames/f%04d.png" % k, compress_level=1)
 run(["ffmpeg", "-y", "-framerate", str(FPS), "-i", "frames/f%04d.png",
      "-c:v", "libx264", "-pix_fmt", "yuv420p", "-preset", "veryfast", "-crf", "22",
      "-t", "%.3f" % sub_d, "sub_screen.mp4"])
@@ -248,7 +287,6 @@ for i, (p, kind) in enumerate(zip(parts, kinds)):
     d = durs[i]
     if kind == "outro":
         vlist.append("sub_screen.mp4")
-        # caption of outro sentence shown during the voice part only
         voice_part = d - tail
         ws = p.split()
         groups = [" ".join(ws[k:k + 3]) for k in range(0, len(ws), 3)]
@@ -290,8 +328,7 @@ with open("subs.ass", "w", encoding="utf-8") as f:
 with open("vlist.txt", "w") as f:
     for v in vlist:
         f.write("file '%s'\n" % v)
-
-run(["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", "vlist.txt",
+     run(["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", "vlist.txt",
      "-c", "copy", "joined.mp4"])
 run(["ffmpeg", "-y", "-i", "joined.mp4", "-i", "voice.wav",
      "-vf", "subtitles=subs.ass:fontsdir=/usr/share/fonts",
@@ -303,4 +340,6 @@ with open("output/meta.json", "w", encoding="utf-8") as f:
     json.dump({"title": ai.get("title"), "description": ai.get("description"),
                "tags": ai.get("tags"), "topic": ai.get("topic")},
               f, ensure_ascii=False)
-print("DONE")
+print("DONE")   
+
+run(["ffmpeg", "-y", "-i", "voice_raw.mp3",
