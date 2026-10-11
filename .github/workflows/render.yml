@@ -20,7 +20,9 @@ jobs:
       - name: Install tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y ffmpeg fonts-noto-core
+          sudo apt-get install -y ffmpeg fonts-hosny-amiri fontconfig
+          fc-cache -f
+          fc-list | grep -i amiri | head -3
           pip install edge-tts
 
       - name: Render video
