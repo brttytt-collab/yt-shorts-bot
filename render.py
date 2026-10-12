@@ -1,4 +1,4 @@
-import json, os, re, math, subprocess, urllib.request, urllib.parse
+import json, os, re, math, time, subprocess, urllib.request, urllib.parse
 from PIL import Image, ImageDraw, ImageFont
 
 data = json.loads(os.environ["PAYLOAD"])
@@ -75,6 +75,24 @@ def find_video(query, i):
     raise SystemExit("no video available")
 
 
+def make_voice(full_text):
+    if USE_OPENAI and OAI:
+        payload = {"model": "gpt-4o-mini-tts", "voice": "onyx", "input": full_text, "response_format": "mp3", "instructions": "Speak Arabic like a calm professional documentary narrator, clear, warm, smooth pacing."}
+        body_json = json.dumps(payload).encode()
+        req = urllib.request.Request("https://api.openai.com/v1/audio/speech", data=body_json, headers={"Authorization": "Bearer " + OAI, "Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=180) as r, open("voice_raw.mp3", "wb") as f:
+            f.write(r.read())
+        return
+    for attempt in range(6):
+        try:
+            run(["edge-tts", "--voice", VOICE, "--rate=-3%", "--file", "full.txt", "--write-media", "voice_raw.mp3"])
+            return
+        except Exception:
+            print("edge-tts failed, retry", attempt + 1)
+            time.sleep(10)
+    raise SystemExit("edge-tts failed 6 times")
+
+
 intro = clean(ai.get("intro"))
 outro = clean(ai.get("outro")) or "اشترك في القناة وفعّل الجرس لتصلك كل جديد"
 body = [clean(s.get("narration")) for s in content]
@@ -88,14 +106,7 @@ full = " ".join(p if p[-1] in ".!?" else p + "." for p in parts)
 with open("full.txt", "w", encoding="utf-8") as f:
     f.write(full)
 
-if USE_OPENAI and OAI:
-    payload = {"model": "gpt-4o-mini-tts", "voice": "onyx", "input": full, "response_format": "mp3", "instructions": "Speak Arabic like a calm professional documentary narrator, clear, warm, smooth pacing."}
-    body_json = json.dumps(payload).encode()
-    req = urllib.request.Request("https://api.openai.com/v1/audio/speech", data=body_json, headers={"Authorization": "Bearer " + OAI, "Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=180) as r, open("voice_raw.mp3", "wb") as f:
-        f.write(r.read())
-else:
-    run(["edge-tts", "--voice", VOICE, "--rate=-3%", "--file", "full.txt", "--write-media", "voice_raw.mp3"])
+make_voice(full)
 
 run(["ffmpeg", "-y", "-i", "voice_raw.mp3", "-af", "silenceremove=start_periods=1:start_threshold=-45dB,loudnorm=I=-16:TP=-1.5:LRA=11", "-ar", "44100", "-ac", "2", "voice_n.wav"])
 total_voice = duration("voice_n.wav")
@@ -147,7 +158,6 @@ def make_bell(angle_deg):
     return im.resize((120, 88), Image.LANCZOS)
 
 
-# <-- CHANGED: the whole make_hand function (index finger raised)
 def make_hand():
     im = Image.new("RGBA", (400, 560), (0, 0, 0, 0))
     d = ImageDraw.Draw(im)
@@ -168,7 +178,7 @@ def make_hand():
 
 
 HAND = make_hand()
-HAND_TIP = (80, 10)  # <-- CHANGED
+HAND_TIP = (80, 10)
 ROW_Y = 1050
 SUB_CX = 400
 BELL_CX = 780
