@@ -7,9 +7,7 @@ fallback_videos = data.get("videos", [])
 content = ai["scenes"]
 PIX = os.environ.get("PIXABAY_KEY", "")
 OAI = os.environ.get("OPENAI_KEY", "")
-USE_OPENAI = True
 OPENAI_VOICE = "onyx"
-VOICE = "ar-EG-ShakirNeural"
 FONT = "Amiri"
 subject = (ai.get("subject_en") or "").strip()
 os.makedirs("output", exist_ok=True)
@@ -76,39 +74,23 @@ def find_video(query, i):
     raise SystemExit("no video available")
 
 
-def voice_openai(full_text):
-    payload = {"model": "gpt-4o-mini-tts", "voice": OPENAI_VOICE, "input": full_text, "response_format": "mp3", "instructions": "Speak Arabic like a calm professional documentary narrator, clear, warm, smooth pacing."}
+def tts(text, out_mp3):
+    if not OAI:
+        raise SystemExit("OPENAI_KEY secret is missing in GitHub")
+    payload = {"model": "gpt-4o-mini-tts", "voice": OPENAI_VOICE, "input": text, "response_format": "mp3", "instructions": "Speak Arabic like a calm professional documentary narrator, clear, warm, smooth pacing. Keep the same tone and speed throughout, with a natural flowing rhythm."}
     body_json = json.dumps(payload).encode()
-    req = urllib.request.Request("https://api.openai.com/v1/audio/speech", data=body_json, headers={"Authorization": "Bearer " + OAI, "Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=180) as r, open("voice_raw.mp3", "wb") as f:
-        f.write(r.read())
-
-
-def voice_edge():
-    run(["edge-tts", "--voice", VOICE, "--rate=-3%", "--file", "full.txt", "--write-media", "voice_raw.mp3"])
-
-
-def make_voice(full_text):
-    if USE_OPENAI:
-        if not OAI:
-            print("OPENAI_KEY secret is missing in GitHub, falling back to edge-tts")
-        else:
-            for attempt in range(3):
-                try:
-                    voice_openai(full_text)
-                    return
-                except Exception as e:
-                    print("openai tts failed:", e)
-                    time.sleep(5)
-            print("openai tts failed 3 times, falling back to edge-tts")
+    last = None
     for attempt in range(3):
         try:
-            voice_edge()
+            req = urllib.request.Request("https://api.openai.com/v1/audio/speech", data=body_json, headers={"Authorization": "Bearer " + OAI, "Content-Type": "application/json"})
+            with urllib.request.urlopen(req, timeout=180) as r, open(out_mp3, "wb") as f:
+                f.write(r.read())
             return
-        except Exception:
-            print("edge-tts failed, retry", attempt + 1)
-            time.sleep(10)
-    raise SystemExit("no voice engine worked")
+        except Exception as e:
+            last = e
+            print("openai tts failed:", e)
+            time.sleep(5)
+    raise SystemExit("openai tts failed: %s" % last)
 
 
 intro = clean(ai.get("intro"))
@@ -120,22 +102,53 @@ parts = ([intro] if intro else []) + body + [outro]
 kinds = (["intro"] if intro else []) + ["content"] * len(body) + ["outro"]
 pq = ([""] if intro else []) + queries + [""]
 
-full = " ".join(p if p[-1] in ".!?" else p + "." for p in parts)
-with open("full.txt", "w", encoding="utf-8") as f:
-    f.write(full)
-
-make_voice(full)
-
-run(["ffmpeg", "-y", "-i", "voice_raw.mp3", "-af", "silenceremove=start_periods=1:start_threshold=-45dB,loudnorm=I=-16:TP=-1.5:LRA=11", "-ar", "44100", "-ac", "2", "voice_n.wav"])
-total_voice = duration("voice_n.wav")
+# ---------- one voice file per sentence, measured exactly ----------
+GAP = 0.12
 lead = 0.4
 tail = 3.0
-run(["ffmpeg", "-y", "-i", "voice_n.wav", "-af", "adelay=%d|%d,apad=pad_dur=%.2f" % (int(lead * 1000), int(lead * 1000), tail), "voice.wav"])
+seg_dur = []
+for i, p in enumerate(parts):
+    text = p if p[-1] in ".!?" else p + "."
+    tts(text, "raw%d.mp3" % i)
+    run(["ffmpeg", "-y", "-i", "raw%d.mp3" % i, "-af", "silenceremove=start_periods=1:start_threshold=-45dB,areverse,silenceremove=start_periods=1:start_threshold=-45dB,areverse,loudnorm=I=-16:TP=-1.5:LRA=11", "-ar", "44100", "-ac", "2", "seg%d.wav" % i])
+    seg_dur.append(duration("seg%d.wav" % i))
 
-lens = [max(8, len(p)) for p in parts]
-durs = [total_voice * n / sum(lens) for n in lens]
-durs[0] += lead
-durs[-1] += tail
+# build the final voice track with exact silence offsets
+run(["ffmpeg", "-y", "-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo", "-t", "%.3f" % lead, "lead.wav"])
+run(["ffmpeg", "-y", "-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo", "-t", "%.3f" % GAP, "gap.wav"])
+run(["ffmpeg", "-y", "-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo", "-t", "%.3f" % tail, "tail.wav"])
+with open("alist.txt", "w") as f:
+    f.write("file 'lead.wav'\n")
+    for i in range(len(parts)):
+        f.write("file 'seg%d.wav'\n" % i)
+        if i < len(parts) - 1:
+            f.write("file 'gap.wav'\n")
+    f.write("file 'tail.wav'\n")
+run(["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", "alist.txt", "-ar", "44100", "-ac", "2", "voice.wav"])
+
+# exact start/end of each sentence on the final timeline
+starts = []
+ends = []
+cur = lead
+for i in range(len(parts)):
+    starts.append(cur)
+    cur += seg_dur[i]
+    ends.append(cur)
+    cur += GAP
+
+# video segment durations: each scene covers its sentence + gap (first one also the lead)
+durs = []
+for i in range(len(parts)):
+    if i == 0:
+        s_start = 0.0
+    else:
+        s_start = ends[i - 1] + GAP
+    if i == len(parts) - 1:
+        s_end = ends[i] + tail
+    else:
+        s_end = ends[i] + GAP
+    durs.append(s_end - s_start)
+sub_d = durs[-1]
 
 W, H = 1080, 1920
 FPS = 30
@@ -272,7 +285,6 @@ def frame(tsec, base):
 
 
 os.makedirs("frames", exist_ok=True)
-sub_d = durs[-1]
 base = grad_bg()
 nframes = int(sub_d * FPS) + 1
 for k in range(nframes):
@@ -295,37 +307,27 @@ ass = [
     "Format: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text",
 ]
 
-t = 0.0
 vlist = []
 for i, (p, kind) in enumerate(zip(parts, kinds)):
     d = durs[i]
-    if kind == "outro":
+    if kind != "outro":
+        clip = "clip%d.mp4" % i
+        download(find_video(pq[i], i), clip)
+        run(["ffmpeg", "-y", "-stream_loop", "-1", "-i", clip, "-t", "%.3f" % d, "-vf", "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1,fps=30", "-an", "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-pix_fmt", "yuv420p", "sv%d.mp4" % i])
+        vlist.append("sv%d.mp4" % i)
+    else:
         vlist.append("sub_screen.mp4")
-        voice_part = d - tail
-        ws = p.split()
-        groups = [" ".join(ws[k:k + 3]) for k in range(0, len(ws), 3)]
-        weights = [max(1, len(g)) for g in groups]
-        gt = t
-        for g, w in zip(groups, weights):
-            gd = voice_part * w / sum(weights)
-            ass.append("Dialogue: 0,%s,%s,Default,,0,0,0,,%s" % (ts(gt), ts(gt + gd), g))
-            gt += gd
-        t += d
-        continue
-    clip = "clip%d.mp4" % i
-    download(find_video(pq[i], i), clip)
-    run(["ffmpeg", "-y", "-stream_loop", "-1", "-i", clip, "-t", "%.3f" % d, "-vf", "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1,fps=30", "-an", "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-pix_fmt", "yuv420p", "sv%d.mp4" % i])
-    vlist.append("sv%d.mp4" % i)
+
+    # captions timed to the measured voice of this sentence
     ws = p.split()
     groups = [" ".join(ws[k:k + 3]) for k in range(0, len(ws), 3)]
-    weights = [max(1, len(g)) for g in groups]
-    speak = d - (lead if i == 0 else 0)
-    gt = t + (lead if i == 0 else 0)
+    weights = [max(1, len(g.replace(" ", ""))) for g in groups]
+    total_w = float(sum(weights))
+    gt = starts[i]
     for g, w in zip(groups, weights):
-        gd = speak * w / sum(weights)
+        gd = seg_dur[i] * w / total_w
         ass.append("Dialogue: 0,%s,%s,Default,,0,0,0,,%s" % (ts(gt), ts(gt + gd), g))
         gt += gd
-    t += d
 
 hook = clean(ai.get("hook"))
 if hook:
