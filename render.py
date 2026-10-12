@@ -7,7 +7,8 @@ fallback_videos = data.get("videos", [])
 content = ai["scenes"]
 PIX = os.environ.get("PIXABAY_KEY", "")
 OAI = os.environ.get("OPENAI_KEY", "")
-USE_OPENAI = False
+USE_OPENAI = True
+OPENAI_VOICE = "onyx"
 VOICE = "ar-EG-ShakirNeural"
 FONT = "Amiri"
 subject = (ai.get("subject_en") or "").strip()
@@ -75,22 +76,39 @@ def find_video(query, i):
     raise SystemExit("no video available")
 
 
+def voice_openai(full_text):
+    payload = {"model": "gpt-4o-mini-tts", "voice": OPENAI_VOICE, "input": full_text, "response_format": "mp3", "instructions": "Speak Arabic like a calm professional documentary narrator, clear, warm, smooth pacing."}
+    body_json = json.dumps(payload).encode()
+    req = urllib.request.Request("https://api.openai.com/v1/audio/speech", data=body_json, headers={"Authorization": "Bearer " + OAI, "Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=180) as r, open("voice_raw.mp3", "wb") as f:
+        f.write(r.read())
+
+
+def voice_edge():
+    run(["edge-tts", "--voice", VOICE, "--rate=-3%", "--file", "full.txt", "--write-media", "voice_raw.mp3"])
+
+
 def make_voice(full_text):
-    if USE_OPENAI and OAI:
-        payload = {"model": "gpt-4o-mini-tts", "voice": "onyx", "input": full_text, "response_format": "mp3", "instructions": "Speak Arabic like a calm professional documentary narrator, clear, warm, smooth pacing."}
-        body_json = json.dumps(payload).encode()
-        req = urllib.request.Request("https://api.openai.com/v1/audio/speech", data=body_json, headers={"Authorization": "Bearer " + OAI, "Content-Type": "application/json"})
-        with urllib.request.urlopen(req, timeout=180) as r, open("voice_raw.mp3", "wb") as f:
-            f.write(r.read())
-        return
-    for attempt in range(6):
+    if USE_OPENAI:
+        if not OAI:
+            print("OPENAI_KEY secret is missing in GitHub, falling back to edge-tts")
+        else:
+            for attempt in range(3):
+                try:
+                    voice_openai(full_text)
+                    return
+                except Exception as e:
+                    print("openai tts failed:", e)
+                    time.sleep(5)
+            print("openai tts failed 3 times, falling back to edge-tts")
+    for attempt in range(3):
         try:
-            run(["edge-tts", "--voice", VOICE, "--rate=-3%", "--file", "full.txt", "--write-media", "voice_raw.mp3"])
+            voice_edge()
             return
         except Exception:
             print("edge-tts failed, retry", attempt + 1)
             time.sleep(10)
-    raise SystemExit("edge-tts failed 6 times")
+    raise SystemExit("no voice engine worked")
 
 
 intro = clean(ai.get("intro"))
